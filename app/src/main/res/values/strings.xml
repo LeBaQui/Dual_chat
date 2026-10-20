@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_desc">Đọc chữ trong ô nhập của app AI chính (chỉ app được chọn) để gửi sang Gemini sửa ngữ pháp / dịch, hiện kết quả trong popup nổi.</string>
+</resources>
