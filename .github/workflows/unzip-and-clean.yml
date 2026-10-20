@@ -1,49 +1,45 @@
-name: Extract zip into repo root and push
+name: Unzip Apk_appv2
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  extract-root:
+  unzip:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Check zip exists
-        shell: bash
+      - name: Unzip và bỏ folder bọc ngoài
         run: |
           set -e
-          if [ ! -f "DualAiGrammar.zip" ]; then
-            echo "Không tìm thấy file zip: DualAiGrammar.zip"
-            exit 1
+          ZIP="DualAiGrammar.zip"
+
+          rm -rf /tmp/unz
+          mkdir /tmp/unz
+          unzip -q "$ZIP" -d /tmp/unz
+
+          # Nếu top-level chỉ có đúng 1 folder (folder bọc) thì chui vào trong nó
+          SRC=/tmp/unz
+          if [ "$(ls -A /tmp/unz | wc -l)" -eq 1 ] && [ -d "$(ls -d /tmp/unz/* | head -n1)" ]; then
+            SRC="$(ls -d /tmp/unz/* | head -n1)"
           fi
-          echo "Tìm thấy file zip: DualAiGrammar.zip"
 
-      - name: Extract zip into repo root
-        shell: bash
-        run: |
-          set -e
-          unzip -o "DualAiGrammar.zip" -d .
-          echo "Danh sách file sau khi giải nén:"
-          find . -maxdepth 2 -type f | sort
+          echo "Nguồn copy: $SRC"
 
-      - name: Commit and push extracted files
-        shell: bash
+          # Copy toàn bộ nội dung (kể cả file ẩn) ra thư mục gốc của repo
+          rsync -a --exclude='.git/' --exclude='.github/workflows/' "$SRC"/ ./
+
+          # Xóa file zip sau khi giải nén
+          rm -f "$ZIP"
+
+      - name: Commit và push
         run: |
-          set -e
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add .
-
-          if git diff --cached --quiet; then
-            echo "Không có thay đổi nào để commit."
-            exit 0
-          fi
-
-          git commit -m "Extract DualAiGrammar.zip into repo root"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Unzip DualAiGrammar.zip" || echo "Không có thay đổi để commit"
+          git push
