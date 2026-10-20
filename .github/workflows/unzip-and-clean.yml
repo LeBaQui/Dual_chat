@@ -1,66 +1,49 @@
-name: Unzip archive and cleanup
+name: Extract zip into repo root and push
 
 on:
   workflow_dispatch:
-    inputs:
-      zip_path:
-        description: "Đường dẫn tới file zip trong repo"
-        required: true
-        default: "DualAiGrammar.zip"
-      extract_dir:
-        description: "Thư mục lưu sau khi giải nén"
-        required: true
-        default: "extracted"
 
 jobs:
-  unzip-and-clean:
+  extract-root:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Validate archive exists
+      - name: Check zip exists
         shell: bash
         run: |
           set -e
-          ZIP_PATH="${{ github.event.inputs.zip_path }}"
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "Không tìm thấy file zip: $ZIP_PATH"
+          if [ ! -f "DualAiGrammar.zip" ]; then
+            echo "Không tìm thấy file zip: DualAiGrammar.zip"
             exit 1
           fi
-          echo "Tìm thấy file zip: $ZIP_PATH"
+          echo "Tìm thấy file zip: DualAiGrammar.zip"
 
-      - name: Unzip archive
+      - name: Extract zip into repo root
         shell: bash
         run: |
           set -e
-          ZIP_PATH="${{ github.event.inputs.zip_path }}"
-          EXTRACT_DIR="${{ github.event.inputs.extract_dir }}"
+          unzip -o "DualAiGrammar.zip" -d .
+          echo "Danh sách file sau khi giải nén:"
+          find . -maxdepth 2 -type f | sort
 
-          rm -rf "$EXTRACT_DIR"
-          mkdir -p "$EXTRACT_DIR"
-
-          unzip -o "$ZIP_PATH" -d "$EXTRACT_DIR"
-
-          echo "Nội dung sau khi giải nén:"
-          find "$EXTRACT_DIR" -maxdepth 2 -type f | head -200
-
-      - name: Process extracted files
+      - name: Commit and push extracted files
         shell: bash
         run: |
           set -e
-          EXTRACT_DIR="${{ github.event.inputs.extract_dir }}"
-          echo "Bắt đầu xử lý file trong thư mục: $EXTRACT_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Ví dụ: liệt kê các file để xử lý
-          find "$EXTRACT_DIR" -maxdepth 3 -type f | sort
+          git add .
 
-      - name: Cleanup extracted directory
-        if: always()
-        shell: bash
-        run: |
-          set -e
-          EXTRACT_DIR="${{ github.event.inputs.extract_dir }}"
-          rm -rf "$EXTRACT_DIR"
-          echo "Đã xóa thư mục $EXTRACT_DIR sau khi hoàn tất."
+          if git diff --cached --quiet; then
+            echo "Không có thay đổi nào để commit."
+            exit 0
+          fi
+
+          git commit -m "Extract DualAiGrammar.zip into repo root"
+          git push origin HEAD:${GITHUB_REF_NAME}
