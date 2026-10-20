@@ -1,0 +1,66 @@
+name: Unzip archive and cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: "Đường dẫn tới file zip trong repo"
+        required: true
+        default: "DualAiGrammar.zip"
+      extract_dir:
+        description: "Thư mục lưu sau khi giải nén"
+        required: true
+        default: "extracted"
+
+jobs:
+  unzip-and-clean:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate archive exists
+        shell: bash
+        run: |
+          set -e
+          ZIP_PATH="${{ github.event.inputs.zip_path }}"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "Không tìm thấy file zip: $ZIP_PATH"
+            exit 1
+          fi
+          echo "Tìm thấy file zip: $ZIP_PATH"
+
+      - name: Unzip archive
+        shell: bash
+        run: |
+          set -e
+          ZIP_PATH="${{ github.event.inputs.zip_path }}"
+          EXTRACT_DIR="${{ github.event.inputs.extract_dir }}"
+
+          rm -rf "$EXTRACT_DIR"
+          mkdir -p "$EXTRACT_DIR"
+
+          unzip -o "$ZIP_PATH" -d "$EXTRACT_DIR"
+
+          echo "Nội dung sau khi giải nén:"
+          find "$EXTRACT_DIR" -maxdepth 2 -type f | head -200
+
+      - name: Process extracted files
+        shell: bash
+        run: |
+          set -e
+          EXTRACT_DIR="${{ github.event.inputs.extract_dir }}"
+          echo "Bắt đầu xử lý file trong thư mục: $EXTRACT_DIR"
+
+          # Ví dụ: liệt kê các file để xử lý
+          find "$EXTRACT_DIR" -maxdepth 3 -type f | sort
+
+      - name: Cleanup extracted directory
+        if: always()
+        shell: bash
+        run: |
+          set -e
+          EXTRACT_DIR="${{ github.event.inputs.extract_dir }}"
+          rm -rf "$EXTRACT_DIR"
+          echo "Đã xóa thư mục $EXTRACT_DIR sau khi hoàn tất."
