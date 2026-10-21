@@ -38,6 +38,13 @@ Dịch văn bản sau sang tiếng Anh tự nhiên, giọng nói chuyện. Chỉ
     fun rawPrompts(c: Context): String = sp(c).getString("prompts", DEFAULT_PROMPTS) ?: DEFAULT_PROMPTS
     fun activeIdx(c: Context): Int = sp(c).getInt("active", 0)
 
+    // Công tắc bật/tắt tự động gửi sang Gemini (mặc định bật)
+    fun enabled(c: Context): Boolean = sp(c).getBoolean("enabled", true)
+
+    fun setEnabled(c: Context, on: Boolean) {
+        sp(c).edit().putBoolean("enabled", on).apply()
+    }
+
     fun setActiveIdx(c: Context, i: Int) {
         sp(c).edit().putInt("active", i).apply()
     }
