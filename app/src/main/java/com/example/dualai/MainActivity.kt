@@ -1,6 +1,7 @@
 package com.example.dualai
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -25,6 +26,7 @@ class MainActivity : Activity() {
     private lateinit var statusTv: TextView
     private lateinit var keyEt: EditText
     private lateinit var modelEt: EditText
+    private lateinit var listBtn: Button
     private lateinit var thinkSp: Spinner
     private lateinit var pkgEt: EditText
     private lateinit var ctxEt: EditText
@@ -82,6 +84,9 @@ class MainActivity : Activity() {
         modelEt = edit("Tên model", Prefs.model(this))
         col.addView(modelEt)
 
+        listBtn = button("Tìm list model (bấm để chọn)") { fetchModels() }
+        col.addView(listBtn)
+
         thinkSp = Spinner(this)
         col.addView(thinkSp)
         isGemma = Prefs.model(this).trim().lowercase().startsWith("gemma")
@@ -98,9 +103,17 @@ class MainActivity : Activity() {
             }
         })
 
-        col.addView(label("Package app AI chính (mặc định app Claude)"))
-        pkgEt = edit("com.anthropic.claude", Prefs.pkg(this))
+        col.addView(label("Package các app AI cần theo dõi (cách nhau bằng dấu phẩy; mặc định: Claude, ChatGPT, Grok, Gemini)"))
+        pkgEt = edit(Prefs.DEFAULT_PKG, Prefs.pkg(this))
+        pkgEt.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        pkgEt.minLines = 2
+        pkgEt.gravity = Gravity.TOP
         col.addView(pkgEt)
+        col.addView(button("Đặt lại package mặc định (cả 4 AI)") {
+            pkgEt.setText(Prefs.DEFAULT_PKG)
+            save()
+            toast("Đã đặt lại package mặc định")
+        })
 
         col.addView(label("Số tin nhắn trước gửi kèm làm ngữ cảnh (0 = tắt)"))
         ctxEt = edit("0", Prefs.ctxN(this).toString())
@@ -142,8 +155,62 @@ class MainActivity : Activity() {
         val on = ChatAccessibilityService.instance != null
         statusTv.text = "Trợ năng: " + (if (on) "ĐANG CHẠY" else "chưa bật") +
             "\nChữ ô nhập bắt được gần nhất: " + ChatAccessibilityService.dbgText +
-            "\nSố lần phát hiện gửi: " + ChatAccessibilityService.dbgSent
+            "\nSố lần phát hiện gửi: " + ChatAccessibilityService.dbgSent +
+            "\nLần quét gần nhất: " + ChatAccessibilityService.dbgNode
     }
+
+    // ---------- tìm list model ----------
+
+    private fun fetchModels() {
+        val key = keyEt.text.toString().trim()
+        if (key.isEmpty()) {
+            toast("Nhập API key trước nha")
+            return
+        }
+        listBtn.isEnabled = false
+        listBtn.text = "Đang lấy danh sách model…"
+        Thread {
+            try {
+                val list = GeminiClient.listModels(key)
+                runOnUiThread {
+                    resetListBtn()
+                    if (!isFinishing && !isDestroyed) showModels(list)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    resetListBtn()
+                    toast("Lỗi: " + (e.message ?: e.toString()))
+                }
+            }
+        }.start()
+    }
+
+    private fun resetListBtn() {
+        listBtn.isEnabled = true
+        listBtn.text = "Tìm list model (bấm để chọn)"
+    }
+
+    private fun showModels(list: List<ModelInfo>) {
+        if (list.isEmpty()) {
+            toast("Không có model nào dùng được")
+            return
+        }
+        val items = list.map {
+            if (it.displayName.isBlank()) it.id else it.id + "\n" + it.displayName
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(list.size.toString() + " model dùng được — bấm để chọn")
+            .setItems(items) { _, which ->
+                val id = list[which].id
+                modelEt.setText(id)
+                Prefs.setModel(this, id)
+                toast("Đã chọn: $id")
+            }
+            .setNegativeButton("Đóng", null)
+            .show()
+    }
+
+    // ---------- thinking / lưu ----------
 
     private fun refreshLevels(keep: String) {
         levels = if (isGemma) gemmaLevels else geminiLevels
