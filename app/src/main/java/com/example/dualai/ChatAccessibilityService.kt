@@ -18,6 +18,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -36,12 +37,15 @@ class ChatAccessibilityService : AccessibilityService() {
         @Volatile var instance: ChatAccessibilityService? = null
         @Volatile var dbgText: String = ""
         @Volatile var dbgSent: Int = 0
+        // thông tin chẩn đoán: lần quét gần nhất có tìm thấy ô nhập không
+        @Volatile var dbgNode: String = ""
     }
 
     private lateinit var wm: WindowManager
     private val ui = Handler(Looper.getMainLooper())
 
-    private var targetPkg = ""
+    // có thể nhiều package, phân tách bằng dấu phẩy / chấm phẩy / khoảng trắng
+    private var targets: Set<String> = emptySet()
     private var lastText = ""
     private var lastTriggered = ""
     private var lastTrigAt = 0L
@@ -63,6 +67,11 @@ class ChatAccessibilityService : AccessibilityService() {
     private lateinit var origTv: TextView
     private lateinit var resultTv: TextView
 
+    // quét cây node có debounce (tránh quét liên tục khi app đang stream chữ)
+    private val scanRunnable = Runnable { scanInput() }
+
+    private val sendWords = listOf("send", "gửi", "gui", "submit")
+
     // ---------- vòng đời ----------
 
     override fun onServiceConnected() {
@@ -75,6 +84,7 @@ class ChatAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         jobId++
+        ui.removeCallbacks(scanRunnable)
         removeSafe(bubble, bubbleOn)
         removeSafe(panel, panelOn)
         bubbleOn = false
@@ -87,30 +97,176 @@ class ChatAccessibilityService : AccessibilityService() {
 
     // Gọi lại sau khi lưu cài đặt: chỉ nhận sự kiện từ đúng app đã chọn
     fun applyConfig() {
-        targetPkg = Prefs.pkg(this)
+        targets = Prefs.pkg(this)
+            .split(',', ';', ' ', '\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
         val info = serviceInfo ?: return
-        info.packageNames = arrayOf(targetPkg)
+        info.packageNames = if (targets.isEmpty()) arrayOf("none.none") else targets.toTypedArray()
+        info.eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_FOCUSED or
+                AccessibilityEvent.TYPE_VIEW_CLICKED or
+                AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+        info.flags = info.flags or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         serviceInfo = info
+    }
+
+    private fun isTarget(pkg: CharSequence?): Boolean =
+        pkg != null && targets.contains(pkg.toString())
+
+    // ---------- đọc ô nhập ----------
+
+    private fun isInput(n: AccessibilityNodeInfo): Boolean =
+        n.isEditable || (n.className?.toString()?.contains("EditText") == true)
+
+    // text của node, bỏ qua chữ gợi ý (hint)
+    private fun textOf(n: AccessibilityNodeInfo): String {
+        if (n.isShowingHintText) return ""
+        val t = n.text?.toString() ?: ""
+        val hint = n.hintText?.toString()
+        if (hint != null && t == hint) return ""
+        return t
+    }
+
+    private fun eventText(e: AccessibilityEvent): String {
+        val t = e.text?.joinToString("") ?: ""
+        return t
+    }
+
+    // tìm ô nhập trong 1 cây: ưu tiên ô đang focus, không có thì lấy ô editable đầu tiên
+    private fun findInputIn(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val focused = try {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } catch (_: Exception) {
+            null
+        }
+        if (focused != null && isInput(focused)) return focused
+
+        var first: AccessibilityNodeInfo? = null
+        var count = 0
+        fun dfs(n: AccessibilityNodeInfo?, depth: Int) {
+            if (n == null || count > 1500 || depth > 60) return
+            count++
+            if (isInput(n)) {
+                if (n.isFocused) {
+                    first = n
+                    count = Int.MAX_VALUE // dừng, đã thấy ô focus
+                    return
+                }
+                if (first == null) first = n
+            }
+            for (i in 0 until n.childCount) {
+                dfs(n.getChild(i), depth + 1)
+                if (count == Int.MAX_VALUE) return
+            }
+        }
+        dfs(root, 0)
+        return first
+    }
+
+    // tìm ô nhập của app mục tiêu, kể cả khi nó nằm ở cửa sổ khác với cửa sổ đang active
+    private fun findInputNode(): AccessibilityNodeInfo? {
+        val roots = ArrayList<AccessibilityNodeInfo>()
+        try {
+            rootInActiveWindow?.let { if (isTarget(it.packageName)) roots.add(it) }
+        } catch (_: Exception) {
+        }
+        try {
+            for (w in windows) {
+                val r = w.root ?: continue
+                if (isTarget(r.packageName)) roots.add(r)
+            }
+        } catch (_: Exception) {
+        }
+        var firstFound: AccessibilityNodeInfo? = null
+        for (r in roots) {
+            val n = findInputIn(r) ?: continue
+            if (n.isFocused) return n
+            if (firstFound == null) firstFound = n
+        }
+        return firstFound
+    }
+
+    private fun scheduleScan() {
+        ui.removeCallbacks(scanRunnable)
+        ui.postDelayed(scanRunnable, 120)
+    }
+
+    private fun scanInput() {
+        val node = findInputNode()
+        if (node == null) {
+            dbgNode = "không thấy ô nhập (roots theo dõi: " + targets.joinToString() + ")"
+            return // không thấy ô nhập thì KHÔNG coi là rỗng
+        }
+        val t = textOf(node)
+        dbgNode = "thấy ô nhập: " + (node.className ?: "?") + " | id=" + (node.viewIdResourceName ?: "-") +
+                " | len=" + t.length
+        handleText(t)
     }
 
     // ---------- bắt tin nhắn ----------
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         if (e == null) return
-        if (e.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) return
-        if (e.packageName?.toString() != targetPkg) return
+        if (!isTarget(e.packageName)) return
         if (e.isPassword) {
             lastText = ""
             return
         }
 
-        val src = e.source
-        val hintShown = src?.isShowingHintText == true
-        val hintStr = src?.hintText?.toString()
-        var cur = if (hintShown) "" else (e.text?.joinToString("") ?: "")
-        if (hintStr != null && cur == hintStr) cur = ""
-        dbgText = cur
+        when (e.eventType) {
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                val src = e.source
+                if (src != null && isInput(src)) {
+                    handleText(textOf(src))
+                } else {
+                    // nguồn không phải ô nhập: dùng text của event nếu có, rồi quét cây cho chắc
+                    val et = eventText(e)
+                    if (et.isNotBlank()) handleText(et)
+                    scheduleScan()
+                }
+            }
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                if (looksLikeSend(e.source)) {
+                    // cập nhật text mới nhất trước khi ô bị xoá
+                    findInputNode()?.let {
+                        val t = textOf(it)
+                        if (t.isNotBlank()) lastText = t
+                    }
+                    val t = lastText.trim()
+                    if (t.length >= 2) {
+                        lastText = ""
+                        onSent(t)
+                    }
+                } else {
+                    scheduleScan()
+                }
+            }
+            else -> scheduleScan()
+        }
+    }
 
+    private fun looksLikeSend(n: AccessibilityNodeInfo?): Boolean {
+        var cur = n
+        var depth = 0
+        while (cur != null && depth < 3) {
+            val s = ((cur.contentDescription?.toString() ?: "") + " " +
+                    (cur.text?.toString() ?: "") + " " +
+                    (cur.viewIdResourceName ?: "")).lowercase()
+            if (sendWords.any { s.contains(it) }) return true
+            cur = cur.parent
+            depth++
+        }
+        return false
+    }
+
+    private fun handleText(cur: String) {
+        dbgText = cur
         if (cur.trim().isEmpty()) {
             // ô nhập đang có chữ mà rỗng cả cụm (không phải xoá từng ký tự) => coi là đã gửi
             val prev = lastText.trim()
