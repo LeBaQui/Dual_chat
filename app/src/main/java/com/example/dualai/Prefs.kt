@@ -15,18 +15,36 @@ Dịch văn bản sau sang tiếng Việt tự nhiên. Chỉ trả về bản d�
 Dịch sang tiếng Anh
 Dịch văn bản sau sang tiếng Anh tự nhiên, giọng nói chuyện. Chỉ trả về bản dịch."""
 
+    // Mặc định theo dõi cả 4 AI: Claude, ChatGPT, Grok, Gemini (app + giao diện assistant của Google)
+    const val DEFAULT_PKG =
+        "com.anthropic.claude,com.openai.chatgpt,ai.x.grok," +
+        "com.google.android.apps.bard,com.google.android.googlequicksearchbox"
+
+    // Giá trị mặc định cũ (chỉ Claude): gặp lại thì tự nâng lên mặc định mới
+    private const val OLD_DEFAULT_PKG = "com.anthropic.claude"
+
     private fun sp(c: Context) = c.getSharedPreferences("cfg", Context.MODE_PRIVATE)
 
     fun key(c: Context): String = sp(c).getString("key", "") ?: ""
     fun model(c: Context): String = sp(c).getString("model", "gemini-3.5-flash-lite") ?: "gemini-3.5-flash-lite"
     fun think(c: Context): String = sp(c).getString("think", "") ?: ""
-    fun pkg(c: Context): String = sp(c).getString("pkg", "com.anthropic.claude") ?: "com.anthropic.claude"
+
+    fun pkg(c: Context): String {
+        val v = (sp(c).getString("pkg", null) ?: "").trim()
+        return if (v.isEmpty() || v == OLD_DEFAULT_PKG) DEFAULT_PKG else v
+    }
+
     fun ctxN(c: Context): Int = sp(c).getInt("ctxN", 0)
     fun rawPrompts(c: Context): String = sp(c).getString("prompts", DEFAULT_PROMPTS) ?: DEFAULT_PROMPTS
     fun activeIdx(c: Context): Int = sp(c).getInt("active", 0)
 
     fun setActiveIdx(c: Context, i: Int) {
         sp(c).edit().putInt("active", i).apply()
+    }
+
+    // Chỉ lưu riêng model (dùng khi chọn model từ danh sách mà chưa bấm Lưu cả form)
+    fun setModel(c: Context, model: String) {
+        sp(c).edit().putString("model", model).apply()
     }
 
     fun save(c: Context, key: String, model: String, think: String, pkg: String, ctxN: Int, prompts: String) {
