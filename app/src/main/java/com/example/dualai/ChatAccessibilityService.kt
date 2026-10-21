@@ -438,9 +438,10 @@ class ChatAccessibilityService : AccessibilityService() {
     private fun chip(label: String): TextView = TextView(this).apply {
         text = label
         setTextColor(Color.WHITE)
-        textSize = 14f
+        textSize = 13f
         gravity = Gravity.CENTER
-        setPadding(dp(10), dp(6), dp(10), dp(6))
+        maxLines = 1
+        setPadding(dp(8), dp(6), dp(8), dp(6))
         background = GradientDrawable().apply {
             setColor(0x33FFFFFF)
             cornerRadius = dp(10).toFloat()
@@ -481,23 +482,26 @@ class ChatAccessibilityService : AccessibilityService() {
             gravity = Gravity.CENTER_VERTICAL
         }
         modeTv = chip("Chế độ ▾")
+        // chip chế độ chiếm phần chỗ còn lại, chữ dài thì cắt bằng "…" để không đẩy các nút ra ngoài
+        modeTv.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        modeTv.ellipsize = TextUtils.TruncateAt.END
         modeTv.setOnClickListener { nextMode() }
         val rerun = chip("↻")
         rerun.setOnClickListener { if (curText.isNotEmpty()) run(curText, curCtx) }
         val copy = chip("Chép")
         copy.setOnClickListener { copyResult() }
+        val mini = chip("—")
+        mini.setOnClickListener { minimize() }
         val off = chip("Tắt")
         off.setOnClickListener {
             setEnabled(false)
             Toast.makeText(this, "Đã tắt tự động gửi. Bật lại trong app Dual AI.", Toast.LENGTH_LONG).show()
         }
-        val mini = chip("—")
-        mini.setOnClickListener { minimize() }
 
         header.addView(modeTv, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        header.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        for (v in listOf(rerun, copy, off, mini)) {
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        // thứ tự: ↻ Chép — Tắt (nút thu nhỏ đứng trước nút Tắt cho an toàn)
+        for (v in listOf(rerun, copy, mini, off)) {
             header.addView(v, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { leftMargin = dp(6) })
