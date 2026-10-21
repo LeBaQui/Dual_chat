@@ -18,12 +18,14 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
 class MainActivity : Activity() {
 
     private lateinit var statusTv: TextView
+    private lateinit var enableSw: Switch
     private lateinit var keyEt: EditText
     private lateinit var modelEt: EditText
     private lateinit var listBtn: Button
@@ -36,6 +38,7 @@ class MainActivity : Activity() {
     private val geminiLevels = listOf("" to "Thinking: mặc định", "LOW" to "Low", "MEDIUM" to "Medium", "HIGH" to "High")
     private var levels = geminiLevels
     private var isGemma = false
+    private var syncing = false
 
     private val h = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
@@ -59,6 +62,21 @@ class MainActivity : Activity() {
             text = "Dual AI — Gemini sửa ngữ pháp / dịch"
             textSize = 20f
         })
+
+        // công tắc bật/tắt thật: tắt thì service không nhận sự kiện nào, không gửi gì sang Gemini
+        enableSw = Switch(this).apply {
+            text = "Tự động gửi sang Gemini"
+            textSize = 16f
+            isChecked = Prefs.enabled(this@MainActivity)
+            setPadding(0, dp(12), 0, dp(4))
+        }
+        enableSw.setOnCheckedChangeListener { _, on ->
+            if (!syncing) {
+                val s = ChatAccessibilityService.instance
+                if (s != null) s.setEnabled(on) else Prefs.setEnabled(this, on)
+            }
+        }
+        col.addView(enableSw)
 
         statusTv = TextView(this).apply {
             textSize = 13f
@@ -143,6 +161,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        syncSwitch()
         h.post(tick)
     }
 
@@ -151,9 +170,21 @@ class MainActivity : Activity() {
         h.removeCallbacks(tick)
     }
 
+    // đồng bộ công tắc với Prefs (popup cũng có thể tắt)
+    private fun syncSwitch() {
+        val e = Prefs.enabled(this)
+        if (enableSw.isChecked != e) {
+            syncing = true
+            enableSw.isChecked = e
+            syncing = false
+        }
+    }
+
     private fun refreshStatus() {
+        syncSwitch()
         val on = ChatAccessibilityService.instance != null
         statusTv.text = "Trợ năng: " + (if (on) "ĐANG CHẠY" else "chưa bật") +
+            "\nTự động gửi: " + (if (Prefs.enabled(this)) "BẬT" else "TẮT") +
             "\nChữ ô nhập bắt được gần nhất: " + ChatAccessibilityService.dbgText +
             "\nSố lần phát hiện gửi: " + ChatAccessibilityService.dbgSent +
             "\nLần quét gần nhất: " + ChatAccessibilityService.dbgNode
