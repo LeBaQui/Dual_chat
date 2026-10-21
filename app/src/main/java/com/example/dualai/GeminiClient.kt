@@ -8,9 +8,67 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
+data class ModelInfo(val id: String, val displayName: String)
+
 object GeminiClient {
 
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+    // Lấy thông báo lỗi từ phản hồi của API
+    private fun errorMessage(conn: HttpURLConnection, code: Int): String {
+        val err = try {
+            (conn.errorStream ?: conn.inputStream).bufferedReader().readText()
+        } catch (_: Exception) {
+            ""
+        }
+        return try {
+            JSONObject(err).getJSONObject("error").getString("message")
+        } catch (_: Exception) {
+            "HTTP $code"
+        }
+    }
+
+    // Liệt kê các model chat được (có generateContent), giống nút List trong gemini-chat-1.html.
+    // Chạy trên thread nền.
+    fun listModels(key: String): List<ModelInfo> {
+        val result = ArrayList<ModelInfo>()
+        var pageToken = ""
+        do {
+            var u = "$BASE/models?pageSize=1000"
+            if (pageToken.isNotEmpty()) u += "&pageToken=" + URLEncoder.encode(pageToken, "UTF-8")
+            val conn = URL(u).openConnection() as HttpURLConnection
+            try {
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 15000
+                conn.readTimeout = 30000
+                conn.setRequestProperty("x-goog-api-key", key)
+
+                val code = conn.responseCode
+                if (code !in 200..299) throw RuntimeException(errorMessage(conn, code))
+
+                val data = JSONObject(conn.inputStream.bufferedReader().readText())
+                val arr = data.optJSONArray("models") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    val m = arr.getJSONObject(i)
+                    val methods = m.optJSONArray("supportedGenerationMethods") ?: continue
+                    var ok = false
+                    for (j in 0 until methods.length()) {
+                        if (methods.optString(j) == "generateContent") {
+                            ok = true
+                            break
+                        }
+                    }
+                    if (!ok) continue
+                    val id = m.optString("name").removePrefix("models/")
+                    if (id.isNotEmpty()) result.add(ModelInfo(id, m.optString("displayName")))
+                }
+                pageToken = data.optString("nextPageToken", "")
+            } finally {
+                conn.disconnect()
+            }
+        } while (pageToken.isNotEmpty())
+        return result
+    }
 
     // Gọi streamGenerateContent (SSE) giống file gemini-chat-1.html. Chạy trên thread nền.
     fun stream(
@@ -43,15 +101,7 @@ object GeminiClient {
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
 
             val code = conn.responseCode
-            if (code !in 200..299) {
-                val err = (conn.errorStream ?: conn.inputStream).bufferedReader().readText()
-                val msg = try {
-                    JSONObject(err).getJSONObject("error").getString("message")
-                } catch (_: Exception) {
-                    "HTTP $code"
-                }
-                throw RuntimeException(msg)
-            }
+            if (code !in 200..299) throw RuntimeException(errorMessage(conn, code))
 
             val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
             while (true) {
