@@ -46,6 +46,8 @@ class ChatAccessibilityService : AccessibilityService() {
 
     // có thể nhiều package, phân tách bằng dấu phẩy / chấm phẩy / khoảng trắng
     private var targets: Set<String> = emptySet()
+    // công tắc bật/tắt (đọc từ Prefs trong applyConfig)
+    @Volatile private var enabled = true
     private var lastText = ""
     private var lastTriggered = ""
     private var lastTrigAt = 0L
@@ -95,15 +97,17 @@ class ChatAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // Gọi lại sau khi lưu cài đặt: chỉ nhận sự kiện từ đúng app đã chọn
+    // Gọi lại sau khi lưu cài đặt: chỉ nhận sự kiện từ đúng app đã chọn.
+    // Khi đang TẮT thì không nhận sự kiện nào cả.
     fun applyConfig() {
+        enabled = Prefs.enabled(this)
         targets = Prefs.pkg(this)
             .split(',', ';', ' ', '\n')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .toSet()
         val info = serviceInfo ?: return
-        info.packageNames = if (targets.isEmpty()) arrayOf("none.none") else targets.toTypedArray()
+        info.packageNames = if (!enabled || targets.isEmpty()) arrayOf("none.none") else targets.toTypedArray()
         info.eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_FOCUSED or
@@ -114,6 +118,18 @@ class ChatAccessibilityService : AccessibilityService() {
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         serviceInfo = info
+    }
+
+    // Bật/tắt tự động gửi sang Gemini. Gọi từ popup hoặc từ màn hình cài đặt.
+    fun setEnabled(on: Boolean) {
+        Prefs.setEnabled(this, on)
+        if (!on) {
+            jobId++ // huỷ lượt đang gọi API
+            ui.removeCallbacks(scanRunnable)
+            lastText = ""
+            closeAll()
+        }
+        applyConfig()
     }
 
     private fun isTarget(pkg: CharSequence?): Boolean =
@@ -198,6 +214,7 @@ class ChatAccessibilityService : AccessibilityService() {
     }
 
     private fun scanInput() {
+        if (!enabled) return
         val node = findInputNode()
         if (node == null) {
             dbgNode = "không thấy ô nhập (roots theo dõi: " + targets.joinToString() + ")"
@@ -213,6 +230,7 @@ class ChatAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         if (e == null) return
+        if (!enabled) return
         if (!isTarget(e.packageName)) return
         if (e.isPassword) {
             lastText = ""
@@ -278,6 +296,7 @@ class ChatAccessibilityService : AccessibilityService() {
     }
 
     private fun onSent(text: String) {
+        if (!enabled) return
         val now = SystemClock.uptimeMillis()
         if (text == lastTriggered && now - lastTrigAt < 1500) return
         lastTriggered = text
@@ -407,6 +426,15 @@ class ChatAccessibilityService : AccessibilityService() {
         }
     }
 
+    // đóng cả popup lẫn bong bóng
+    private fun closeAll() {
+        if (panelOn) {
+            removeSafe(panel, true)
+            panelOn = false
+        }
+        hideAll()
+    }
+
     private fun chip(label: String): TextView = TextView(this).apply {
         text = label
         setTextColor(Color.WHITE)
@@ -458,13 +486,18 @@ class ChatAccessibilityService : AccessibilityService() {
         rerun.setOnClickListener { if (curText.isNotEmpty()) run(curText, curCtx) }
         val copy = chip("Chép")
         copy.setOnClickListener { copyResult() }
+        val off = chip("Tắt")
+        off.setOnClickListener {
+            setEnabled(false)
+            Toast.makeText(this, "Đã tắt tự động gửi. Bật lại trong app Dual AI.", Toast.LENGTH_LONG).show()
+        }
         val mini = chip("—")
         mini.setOnClickListener { minimize() }
 
         header.addView(modeTv, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         header.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        for (v in listOf(rerun, copy, mini)) {
+        for (v in listOf(rerun, copy, off, mini)) {
             header.addView(v, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { leftMargin = dp(6) })
